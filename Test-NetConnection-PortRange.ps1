@@ -1,6 +1,6 @@
 ﻿$DomainControllers = @(
-    "SRVDC01.domain.local",
-    "SRVDC02.domain.local"
+    "SRVDC01.firatboyan.local",
+    "SRVDC02.firatboyan.local"
 )
 
 foreach ($DC in $DomainControllers) {
