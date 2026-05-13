@@ -1,4 +1,24 @@
-﻿$tlsProtocols = @(
+<#
+.SYNOPSIS
+    Enables TLS 1.2 enforcement on Windows Server for .NET Framework 4.x
+    and SChannel layers.
+
+.DESCRIPTION
+    This script implements the registry configuration recommended by
+    Microsoft for Entra Connect (Azure AD Connect) servers. The settings
+    enforce TLS 1.2 for both inbound and outbound connections at the
+    SChannel and .NET Framework layers.
+
+    Reference:
+    https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/reference-connect-tls-enforcement
+
+.NOTES
+    Author: Firat Boyan
+    A reboot is required after running this script for the changes to
+    take effect.
+#>
+ 
+ $tlsProtocols = @(
     'SSL 2.0',
     'SSL 3.0',
     'TLS 1.0',
