@@ -1,4 +1,4 @@
-<#
+<# 
 .SYNOPSIS
     Enables TLS 1.2 enforcement on Windows Server for .NET Framework 4.x
     and SChannel layers.
