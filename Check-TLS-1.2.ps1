@@ -1,40 +1,36 @@
 <#
 .SYNOPSIS
-    Audits the enabled/disabled state of all SSL and TLS protocol versions
-    in the Windows SChannel registry, and verifies the .NET Framework
-    TLS configuration values on the local server.
+    Audits the configuration state of all SSL/TLS protocol versions in
+    SChannel, and verifies the .NET Framework TLS configuration values
+    on the local server.
 
 .DESCRIPTION
-    This is a read-only diagnostic script. It performs two checks:
+    This is a read-only diagnostic script. It distinguishes between three
+    possible states for each SChannel protocol:
 
-    1. SChannel Protocols
-       Enumerates the following protocols under
-       HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols
-       and reports the state of each one in both Server and Client modes:
+        - Explicitly Enabled   : Registry key exists with Enabled = 1
+                                 and DisabledByDefault != 1
+        - Explicitly Disabled  : Registry key exists with Enabled = 0 or
+                                 DisabledByDefault = 1
+        - Not configured       : Registry key does not exist; the operating
+                                 system applies its built-in defaults
 
-           - SSL 2.0
-           - SSL 3.0
-           - TLS 1.0
-           - TLS 1.1
-           - TLS 1.2
-           - TLS 1.3
+    Important: On modern Windows versions (Windows Server 2022 and 2025,
+    Windows 11), the absence of an explicit registry override does not
+    mean the protocol is disabled at runtime. The operating system applies
+    secure defaults: TLS 1.2 and TLS 1.3 are enabled, while SSL 2.0/3.0
+    and TLS 1.0/1.1 are disabled. This script reports the registry state
+    only; it does not perform live protocol negotiation.
 
-       A protocol whose 'Enabled' value is 1 is reported as Enabled (green);
-       any other state is reported as Disabled (red).
+    The script also checks the .NET Framework 4.x registry values
+    (SystemDefaultTlsVersions and SchUseStrongCrypto) under both the
+    64-bit and 32-bit (WOW6432Node) hives. On .NET Framework 4.7 and
+    later, the absence of these values is harmless because the runtime
+    already defers to the operating system by default.
 
-    2. .NET Framework TLS Settings
-       Verifies that the following values are set to 1 under both the
-       64-bit and the 32-bit (WOW6432Node) .NET Framework registry hives:
-
-           - SystemDefaultTlsVersions
-           - SchUseStrongCrypto
-
-       These settings instruct .NET Framework 4.x to defer protocol
-       selection to SChannel and to use strong cryptographic primitives.
-
-    This script complements Set-TLS-1.2.ps1 by allowing administrators
-    to verify the current SChannel and .NET Framework configuration.
-    It does not modify any registry settings.
+    This script complements Set-TLS-1.2.ps1 and is intended primarily
+    for hardened or legacy servers (Windows Server 2016/2019, or Entra
+    Connect servers) where explicit registry overrides are expected.
 
     Reference:
     https://learn.microsoft.com/en-us/entra/identity/hybrid/connect/reference-connect-tls-enforcement
@@ -57,36 +53,35 @@ $tlsProtocols = @(
     'TLS 1.3'
 )
 
-Write-Host " "
-Write-Host "Checking SChannel TLS/SSL protocol statuses...`n" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Checking SChannel TLS/SSL protocol configuration...`n" -ForegroundColor Cyan
 
 foreach ($protocol in $tlsProtocols) {
-    $serverPath = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$protocol\Server"
-    $clientPath = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$protocol\Client"
 
-    $serverEnabled = "Disabled"
-    $clientEnabled = "Disabled"
-    $serverColor   = "Red"
-    $clientColor   = "Red"
+    foreach ($side in @('Server','Client')) {
 
-    if (Test-Path $serverPath) {
-        $serverEnabledKey = Get-ItemProperty -Path $serverPath -ErrorAction SilentlyContinue
-        if ($serverEnabledKey -and $serverEnabledKey.Enabled -eq 1) {
-            $serverEnabled = "Enabled"
-            $serverColor   = "Green"
+        $path = "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\$protocol\$side"
+
+        $status = 'Not configured (OS default)'
+        $color  = 'Yellow'
+
+        if (Test-Path $path) {
+            $key           = Get-ItemProperty -Path $path -ErrorAction SilentlyContinue
+            $enabled       = $key.Enabled
+            $disabledByDef = $key.DisabledByDefault
+
+            if ($enabled -eq 1 -and $disabledByDef -ne 1) {
+                $status = 'Explicitly Enabled'
+                $color  = 'Green'
+            }
+            elseif ($enabled -eq 0 -or $disabledByDef -eq 1) {
+                $status = 'Explicitly Disabled'
+                $color  = 'Red'
+            }
         }
-    }
 
-    if (Test-Path $clientPath) {
-        $clientEnabledKey = Get-ItemProperty -Path $clientPath -ErrorAction SilentlyContinue
-        if ($clientEnabledKey -and $clientEnabledKey.Enabled -eq 1) {
-            $clientEnabled = "Enabled"
-            $clientColor   = "Green"
-        }
+        Write-Host ("{0,-8} - {1,-6} : {2}" -f $protocol, $side, $status) -ForegroundColor $color
     }
-
-    Write-Host "$protocol - Server: $serverEnabled" -ForegroundColor $serverColor
-    Write-Host "$protocol - Client: $clientEnabled" -ForegroundColor $clientColor
     Write-Host "---------------------------" -ForegroundColor Gray
 }
 
@@ -98,18 +93,20 @@ $dotnetPaths = @(
     'HKLM:\SOFTWARE\Microsoft\.NETFramework\v4.0.30319',
     'HKLM:\SOFTWARE\WOW6432Node\Microsoft\.NETFramework\v4.0.30319'
 )
-$dotnetValues = @('SystemDefaultTlsVersions', 'SchUseStrongCrypto')
+$dotnetValues = @('SystemDefaultTlsVersions','SchUseStrongCrypto')
 
 foreach ($path in $dotnetPaths) {
     Write-Host $path -ForegroundColor Gray
     foreach ($name in $dotnetValues) {
         $item = Get-ItemProperty -Path $path -Name $name -ErrorAction SilentlyContinue
         if ($item -and $item.$name -eq 1) {
-            Write-Host "  $name : 1 (Enabled)" -ForegroundColor Green
+            Write-Host ("  {0,-26} : 1 (Explicitly Enabled)" -f $name) -ForegroundColor Green
         }
         else {
-            Write-Host "  $name : Missing or 0" -ForegroundColor Red
+            Write-Host ("  {0,-26} : Not configured (.NET 4.7+ uses OS default)" -f $name) -ForegroundColor Yellow
         }
     }
     Write-Host "---------------------------" -ForegroundColor Gray
 }
+
+Write-Host "`nAudit complete." -ForegroundColor Cyan
